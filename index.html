@@ -19,7 +19,7 @@
         <div id="welcome-screen">
             <h1>Numerosity Discrimination</h1>
             <p>Instructions: Ensure you are in a quiet setting.</p>
-            <p>Decide if there are more <b>Blue</b> or <b>Yellow</b> circles.</p>
+            <p>Decide if there are more <kbd>B</kbd>lue or <kbd>Y</kbd>ellow circles.</p>
             <p>Use <kbd>B</kbd> for Blue and <kbd>Y</kbd> for Yellow.</p>
             <p>Thank you!</p>
             <button id="start-btn" onclick="startExperiment()">Start</button>
@@ -43,7 +43,7 @@
 
     <script>
         // YOUR CUSTOM WEB APP URL - PASTE HERE
-        const scriptURL = "https://script.google.com/macros/s/AKfycbyz1SLVEFaSZBlGKpdxTVvQR1GFFh83eZboI_j9LzvNosIeziNQLTT3MGw98_OsGqbO/exec";
+        const scriptURL = "https://script.google.com/macros/s/AKfycbx0tfnyqLoh7Yz92zMem9Lq1UAqFsMRFaC1aDqqyD2XdNsB2Q2z44KDLAkFfyBX8_k/exec";
         
         const canvas = document.getElementById('taskCanvas');
         const ctx = canvas.getContext('2d');
@@ -58,7 +58,13 @@
 
         const distractionSound = new Audio('https://actions.google.com/sounds/v1/alarms/beep_short.ogg');
 
-        // Bypasses CORS completely by using a JSONP script request instead of fetch
+        // New Dual Task Variables
+        let beepTimeout = null;
+        let beepPlayed = false;
+        let beepStartTime = null;
+        let spacePressed = false;
+        let spacePressTime = null;
+
         function getParticipantIdSafely() {
             return new Promise((resolve, reject) => {
                 const callbackName = 'jsonp_callback_' + Math.round(100000 * Math.random());
@@ -70,7 +76,6 @@
                 };
 
                 const script = document.createElement('script');
-                // Adds the callback parameter to trigger JSONP in the Google Script
                 script.src = scriptURL + (scriptURL.includes('?') ? '&' : '?') + 'callback=' + callbackName;
                 
                 script.onerror = () => {
@@ -96,7 +101,7 @@
                 alert("Database Connection Error. Please ensure you pasted the correct URL and check your internet connection.");
                 startBtn.disabled = false;
                 startBtn.innerText = "Start";
-                return; // Stop experiment
+                return;
             }
 
             document.getElementById('welcome-screen').classList.add('hidden');
@@ -134,6 +139,13 @@
                 return;
             }
 
+            // Reset Dual Task variables for the new trial
+            clearTimeout(beepTimeout);
+            beepPlayed = false;
+            beepStartTime = null;
+            spacePressed = false;
+            spacePressTime = null;
+
             trialActive = true;
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             
@@ -152,13 +164,18 @@
                 const y = Math.random() * (canvas.height - 60) + 30;
                 ctx.beginPath();
                 ctx.arc(x, y, 12, 0, Math.PI * 2);
-                ctx.fillStyle = (i < blueCount) ? "#4d4dff" : "#ffff4d"; // High contrast colors
+                ctx.fillStyle = (i < blueCount) ? "#4d4dff" : "#ffff4d";
                 ctx.fill();
             }
 
             // Dual Task distraction logic
             if (currentBlock === "Dual" && Math.random() > 0.4) {
-                setTimeout(() => { distractionSound.play(); }, Math.random() * 400 + 200);
+                const delay = Math.random() * 400 + 200;
+                beepTimeout = setTimeout(() => { 
+                    distractionSound.play(); 
+                    beepStartTime = performance.now();
+                    beepPlayed = true;
+                }, delay);
             }
 
             startTime = performance.now();
@@ -168,14 +185,49 @@
         window.addEventListener('keydown', (e) => {
             if (!trialActive) return;
 
+            // Handle spacebar press for Dual Task
+            if (e.code === 'Space' && currentBlock === "Dual") {
+                if (!spacePressed) { // Only record the first press
+                    spacePressed = true;
+                    spacePressTime = performance.now();
+                }
+                return; // Do not end the trial
+            }
+
+            // Handle primary task response
             let choice = "";
             const key = e.key.toLowerCase();
             if (key === 'b') choice = "Blue";
             if (key === 'y') choice = "Yellow";
 
             if (choice !== "") {
+                clearTimeout(beepTimeout); // Stop the beep from playing if they answered quickly
+
                 const rt = performance.now() - startTime;
                 const isCorrect = choice === currentCorrectColor ? 1 : 0;
+
+                // Determine Spacebar Accuracy and RT
+                let spaceAcc = "N/A";
+                let spaceRT = "N/A";
+
+                if (currentBlock === "Dual") {
+                    if (beepPlayed) {
+                        if (spacePressed && spacePressTime > beepStartTime) {
+                            spaceAcc = "Hit";
+                            spaceRT = (spacePressTime - beepStartTime).toFixed(0);
+                        } else if (spacePressed && spacePressTime <= beepStartTime) {
+                            spaceAcc = "False Alarm"; // Pressed before the beep
+                        } else {
+                            spaceAcc = "Miss";
+                        }
+                    } else { // Beep never played (either randomly skipped, or user answered before it could play)
+                        if (spacePressed) {
+                            spaceAcc = "False Alarm";
+                        } else {
+                            spaceAcc = "Correct Rejection";
+                        }
+                    }
+                }
 
                 experimentData.push({
                     Participant_ID: participantID,
@@ -184,7 +236,9 @@
                     Trial_Number: experimentData.length + 1,
                     Response_Choice: choice,
                     Accuracy: isCorrect,
-                    Reaction_Time: rt.toFixed(0)
+                    Reaction_Time: rt.toFixed(0),
+                    Space_Accuracy: spaceAcc,
+                    Space_RT: spaceRT
                 });
 
                 trialActive = false;
@@ -207,18 +261,15 @@
                         body: JSON.stringify(experimentData[i])
                     });
                     
-                    // Update progress bar
                     let percent = ((i + 1) / experimentData.length) * 100;
                     progressFill.style.width = percent + "%";
                     
-                    // Short pause to ensure Google Sheet doesn't drop requests
                     await new Promise(resolve => setTimeout(resolve, 200)); 
                 } catch (e) {
                     console.error("Upload error:", e);
                 }
             }
             
-            // Final UI update
             document.getElementById('status-message').innerText = "Data Upload Complete!";
             document.getElementById('end-screen').innerHTML += "<p>Thank you! Your data has been recorded.</p><p>You may now close this window.</p>";
         }
