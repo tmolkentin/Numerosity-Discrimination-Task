@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Group 3: DDM Experiment</title>
+    <style>
+        body { margin: 0; background-color: #333; color: white; font-family: sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; overflow: hidden; }
+        #ui-layer { text-align: center; z-index: 10; background: rgba(0,0,0,0.8); padding: 30px; border-radius: 15px; border: 2px solid #555; }
+        canvas { position: absolute; top: 0; left: 0; cursor: crosshair; }
+        .hidden { display: none; }
+        button { padding: 12px 24px; font-size: 18px; cursor: pointer; background: #4CAF50; color: white; border: none; border-radius: 5px; margin-top: 15px; }
+        button:hover { background: #45a049; }
+        button:disabled { background: #888; cursor: not-allowed; }
+        kbd { background-color: #eee; border-radius: 3px; border: 1px solid #b4b4b4; box-shadow: 0 1px 1px rgba(0,0,0,.2); color: #333; display: inline-block; font-size: .85em; font-weight: 700; line-height: 1; padding: 2px 4px; white-space: nowrap; }
+    </style>
+</head>
+<body>
+
+    <div id="ui-layer">
+        <div id="welcome-screen">
+            <h1>Numerosity Discrimination</h1>
+            <p>Instructions: Ensure you are in a quiet setting.</p>
+            <p>Decide if there are more <b>Blue</b> or <b>Yellow</b> circles.</p>
+            <p>Use <kbd>B</kbd> for Blue and <kbd>Y</kbd> for Yellow.</p>
+            <p>Thank you!</p>
+            <button id="start-btn" onclick="startExperiment()">Start</button>
+        </div>
+
+        <div id="transition-screen" class="hidden">
+            <h2 id="transition-text">Block Complete</h2>
+            <p id="instruction-text">Prepare for the next phase.</p>
+            <button onclick="startBlock()">Start</button>
+        </div>
+
+        <div id="end-screen" class="hidden">
+            <h2 id="status-message">Uploading Results...</h2>
+            <div id="progress-bar" style="width: 100%; background: #555; height: 10px; margin-top: 10px;">
+                <div id="progress-fill" style="width: 0%; background: #4CAF50; height: 100%;"></div>
+            </div>
+        </div>
+    </div>
+
+    <canvas id="taskCanvas"></canvas>
+
+    <script>
+        // YOUR CUSTOM WEB APP URL - PASTE HERE
+        const scriptURL = "https://script.google.com/macros/s/AKfycbyz1SLVEFaSZBlGKpdxTVvQR1GFFh83eZboI_j9LzvNosIeziNQLTT3MGw98_OsGqbO/exec";
+        
+        const canvas = document.getElementById('taskCanvas');
+        const ctx = canvas.getContext('2d');
+        
+        let participantID = "";
+        let currentBlock = "Single"; 
+        let trialCount = 0;
+        const maxTrialsPerBlock = 20; 
+        let experimentData = [];
+        let startTime, trialActive = false, currentCorrectColor = "";
+        let currentCoherence = 0;
+
+        const distractionSound = new Audio('https://actions.google.com/sounds/v1/alarms/beep_short.ogg');
+
+        // Bypasses CORS completely by using a JSONP script request instead of fetch
+        function getParticipantIdSafely() {
+            return new Promise((resolve, reject) => {
+                const callbackName = 'jsonp_callback_' + Math.round(100000 * Math.random());
+                
+                window[callbackName] = function(data) {
+                    delete window[callbackName];
+                    document.body.removeChild(script);
+                    resolve(data.maxId);
+                };
+
+                const script = document.createElement('script');
+                // Adds the callback parameter to trigger JSONP in the Google Script
+                script.src = scriptURL + (scriptURL.includes('?') ? '&' : '?') + 'callback=' + callbackName;
+                
+                script.onerror = () => {
+                    delete window[callbackName];
+                    document.body.removeChild(script);
+                    reject(new Error("Connection Failed"));
+                };
+
+                document.body.appendChild(script);
+            });
+        }
+
+        async function startExperiment() {
+            const startBtn = document.getElementById('start-btn');
+            startBtn.disabled = true;
+            startBtn.innerText = "Loading...";
+
+            try {
+                let maxId = await getParticipantIdSafely();
+                participantID = (maxId + 1).toString();
+            } catch (error) {
+                console.error("Error fetching ID:", error);
+                alert("Database Connection Error. Please ensure you pasted the correct URL and check your internet connection.");
+                startBtn.disabled = false;
+                startBtn.innerText = "Start";
+                return; // Stop experiment
+            }
+
+            document.getElementById('welcome-screen').classList.add('hidden');
+            resizeCanvas();
+            startBlock();
+        }
+
+        window.addEventListener('resize', resizeCanvas);
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+
+        function startBlock() {
+            document.getElementById('transition-screen').classList.add('hidden');
+            trialCount = 0;
+            nextTrial();
+        }
+
+        function nextTrial() {
+            if (trialCount >= maxTrialsPerBlock) {
+                if (currentBlock === "Single") {
+                    currentBlock = "Dual";
+                    document.getElementById('transition-screen').classList.remove('hidden');
+                    document.getElementById('transition-text').innerText = "Dual-Task Paradigm";
+                    document.getElementById('instruction-text').innerHTML = 
+                        "Instructions: Please ensure your volume is on,<br>" +
+                        "and that you are in a quiet setting.<br><br>" +
+                        "In addition to discriminating colors,<br>" +
+                        "please press the <kbd>SPACE</kbd> key whenever you hear a beep.<br><br>" +
+                        "Thank you!";
+                } else {
+                    finishExperiment();
+                }
+                return;
+            }
+
+            trialActive = true;
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // Randomize difficulty (Coherence)
+            currentCoherence = (Math.random() * 0.3 + 0.05).toFixed(2);
+            const totalCircles = 80;
+            const blueCount = Math.random() > 0.5 
+                ? Math.floor(totalCircles * (0.5 + parseFloat(currentCoherence)/2)) 
+                : Math.floor(totalCircles * (0.5 - parseFloat(currentCoherence)/2));
+            const yellowCount = totalCircles - blueCount;
+            currentCorrectColor = blueCount > yellowCount ? "Blue" : "Yellow";
+
+            // Draw stimuli
+            for (let i = 0; i < totalCircles; i++) {
+                const x = Math.random() * (canvas.width - 60) + 30;
+                const y = Math.random() * (canvas.height - 60) + 30;
+                ctx.beginPath();
+                ctx.arc(x, y, 12, 0, Math.PI * 2);
+                ctx.fillStyle = (i < blueCount) ? "#4d4dff" : "#ffff4d"; // High contrast colors
+                ctx.fill();
+            }
+
+            // Dual Task distraction logic
+            if (currentBlock === "Dual" && Math.random() > 0.4) {
+                setTimeout(() => { distractionSound.play(); }, Math.random() * 400 + 200);
+            }
+
+            startTime = performance.now();
+            trialCount++;
+        }
+
+        window.addEventListener('keydown', (e) => {
+            if (!trialActive) return;
+
+            let choice = "";
+            const key = e.key.toLowerCase();
+            if (key === 'b') choice = "Blue";
+            if (key === 'y') choice = "Yellow";
+
+            if (choice !== "") {
+                const rt = performance.now() - startTime;
+                const isCorrect = choice === currentCorrectColor ? 1 : 0;
+
+                experimentData.push({
+                    Participant_ID: participantID,
+                    Condition: currentBlock,
+                    Coherence_Level: currentCoherence,
+                    Trial_Number: experimentData.length + 1,
+                    Response_Choice: choice,
+                    Accuracy: isCorrect,
+                    Reaction_Time: rt.toFixed(0)
+                });
+
+                trialActive = false;
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                setTimeout(nextTrial, 600);
+            }
+        });
+
+        async function finishExperiment() {
+            document.getElementById('end-screen').classList.remove('hidden');
+            const progressFill = document.getElementById('progress-fill');
+            
+            for (let i = 0; i < experimentData.length; i++) {
+                try {
+                    await fetch(scriptURL, {
+                        method: 'POST',
+                        mode: 'no-cors',
+                        cache: 'no-cache',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(experimentData[i])
+                    });
+                    
+                    // Update progress bar
+                    let percent = ((i + 1) / experimentData.length) * 100;
+                    progressFill.style.width = percent + "%";
+                    
+                    // Short pause to ensure Google Sheet doesn't drop requests
+                    await new Promise(resolve => setTimeout(resolve, 200)); 
+                } catch (e) {
+                    console.error("Upload error:", e);
+                }
+            }
+            
+            // Final UI update
+            document.getElementById('status-message').innerText = "Data Upload Complete!";
+            document.getElementById('end-screen').innerHTML += "<p>Thank you! Your data has been recorded.</p><p>You may now close this window.</p>";
+        }
+    </script>
+</body>
+</html>
