@@ -34,7 +34,7 @@
         <div id="end-screen" class="hidden">
             <h2 id="status-message">Uploading Results...</h2>
             <div id="progress-bar" style="width: 100%; background: #555; height: 10px; margin-top: 10px;">
-                <div id="progress-fill" style="width: 0%; background: #4CAF50; height: 100%;"></div>
+                <div id="progress-fill" style="width: 0%; background: #4CAF50; height: 100%; transition: width 0.4s;"></div>
             </div>
         </div>
     </div>
@@ -43,7 +43,7 @@
 
     <script>
         // YOUR CUSTOM WEB APP URL - PASTE HERE
-        const scriptURL = "https://script.google.com/macros/s/AKfycbx0tfnyqLoh7Yz92zMem9Lq1UAqFsMRFaC1aDqqyD2XdNsB2Q2z44KDLAkFfyBX8_k/exec";
+        const scriptURL = 'YOUR_WEB_APP_URL_HERE';
         
         const canvas = document.getElementById('taskCanvas');
         const ctx = canvas.getContext('2d');
@@ -51,14 +51,16 @@
         let participantID = "";
         let currentBlock = "Single"; 
         let trialCount = 0;
-        const maxTrialsPerBlock = 20; 
+        
+        // Increased trials to 50 for better DDM accuracy
+        const maxTrialsPerBlock = 50; 
+        
         let experimentData = [];
         let startTime, trialActive = false, currentCorrectColor = "";
         let currentCoherence = 0;
 
         const distractionSound = new Audio('https://actions.google.com/sounds/v1/alarms/beep_short.ogg');
 
-        // New Dual Task Variables
         let beepTimeout = null;
         let beepPlayed = false;
         let beepStartTime = null;
@@ -139,7 +141,6 @@
                 return;
             }
 
-            // Reset Dual Task variables for the new trial
             clearTimeout(beepTimeout);
             beepPlayed = false;
             beepStartTime = null;
@@ -149,7 +150,6 @@
             trialActive = true;
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             
-            // Randomize difficulty (Coherence)
             currentCoherence = (Math.random() * 0.3 + 0.05).toFixed(2);
             const totalCircles = 80;
             const blueCount = Math.random() > 0.5 
@@ -158,7 +158,6 @@
             const yellowCount = totalCircles - blueCount;
             currentCorrectColor = blueCount > yellowCount ? "Blue" : "Yellow";
 
-            // Draw stimuli
             for (let i = 0; i < totalCircles; i++) {
                 const x = Math.random() * (canvas.width - 60) + 30;
                 const y = Math.random() * (canvas.height - 60) + 30;
@@ -168,7 +167,6 @@
                 ctx.fill();
             }
 
-            // Dual Task distraction logic
             if (currentBlock === "Dual" && Math.random() > 0.4) {
                 const delay = Math.random() * 400 + 200;
                 beepTimeout = setTimeout(() => { 
@@ -185,28 +183,25 @@
         window.addEventListener('keydown', (e) => {
             if (!trialActive) return;
 
-            // Handle spacebar press for Dual Task
             if (e.code === 'Space' && currentBlock === "Dual") {
-                if (!spacePressed) { // Only record the first press
+                if (!spacePressed) { 
                     spacePressed = true;
                     spacePressTime = performance.now();
                 }
-                return; // Do not end the trial
+                return; 
             }
 
-            // Handle primary task response
             let choice = "";
             const key = e.key.toLowerCase();
             if (key === 'b') choice = "Blue";
             if (key === 'y') choice = "Yellow";
 
             if (choice !== "") {
-                clearTimeout(beepTimeout); // Stop the beep from playing if they answered quickly
+                clearTimeout(beepTimeout); 
 
                 const rt = performance.now() - startTime;
                 const isCorrect = choice === currentCorrectColor ? 1 : 0;
 
-                // Determine Spacebar Accuracy and RT
                 let spaceAcc = "N/A";
                 let spaceRT = "N/A";
 
@@ -216,11 +211,11 @@
                             spaceAcc = "Hit";
                             spaceRT = (spacePressTime - beepStartTime).toFixed(0);
                         } else if (spacePressed && spacePressTime <= beepStartTime) {
-                            spaceAcc = "False Alarm"; // Pressed before the beep
+                            spaceAcc = "False Alarm";
                         } else {
                             spaceAcc = "Miss";
                         }
-                    } else { // Beep never played (either randomly skipped, or user answered before it could play)
+                    } else { 
                         if (spacePressed) {
                             spaceAcc = "False Alarm";
                         } else {
@@ -251,23 +246,29 @@
             document.getElementById('end-screen').classList.remove('hidden');
             const progressFill = document.getElementById('progress-fill');
             
-            for (let i = 0; i < experimentData.length; i++) {
-                try {
-                    await fetch(scriptURL, {
-                        method: 'POST',
-                        mode: 'no-cors',
-                        cache: 'no-cache',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(experimentData[i])
-                    });
-                    
-                    let percent = ((i + 1) / experimentData.length) * 100;
-                    progressFill.style.width = percent + "%";
-                    
-                    await new Promise(resolve => setTimeout(resolve, 200)); 
-                } catch (e) {
-                    console.error("Upload error:", e);
-                }
+            // Set bar to halfway to show it is actively working
+            progressFill.style.width = "50%";
+            
+            try {
+                // Send the ENTIRE array of data in one single request (Batch Upload)
+                await fetch(scriptURL, {
+                    method: 'POST',
+                    mode: 'no-cors',
+                    cache: 'no-cache',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(experimentData)
+                });
+                
+                // Once the fetch command completes, fill the bar to 100%
+                progressFill.style.width = "100%";
+                
+                // Brief pause so the user actually sees the bar hit 100% before the text changes
+                await new Promise(resolve => setTimeout(resolve, 400));
+                
+            } catch (e) {
+                console.error("Upload error:", e);
+                document.getElementById('status-message').innerText = "Upload Error. Check Connection.";
+                return; // Stop function if upload fails
             }
             
             document.getElementById('status-message').innerText = "Data Upload Complete!";
