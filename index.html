@@ -42,7 +42,6 @@
     <canvas id="taskCanvas"></canvas>
 
     <script>
-        // YOUR CUSTOM WEB APP URL - PASTE HERE
         const scriptURL = 'https://script.google.com/macros/s/AKfycbyKXg3n8NC8AfRE6QMJ8r0tXDdER9fo4YgP55NQl5qc19_CFMz-tvbrQB9YBhzZZru5/exec';
         
         const canvas = document.getElementById('taskCanvas');
@@ -51,21 +50,17 @@
         let participantID = "";
         let currentBlock = "Single"; 
         let trialCount = 0;
-        
-        // Increased trials to 50 for better DDM accuracy
         const maxTrialsPerBlock = 50; 
-        
         let experimentData = [];
         let startTime, trialActive = false, currentCorrectColor = "";
         let currentCoherence = 0;
 
+        // --- NEW AUDIO TASK VARIABLES ---
         const distractionSound = new Audio('https://actions.google.com/sounds/v1/alarms/beep_short.ogg');
-
-        let beepTimeout = null;
-        let beepPlayed = false;
-        let beepStartTime = null;
-        let spacePressed = false;
-        let spacePressTime = null;
+        let audioLoopActive = false;
+        let beepActiveWindow = false;
+        let beepStartTime = 0;
+        let hitDetected = false;
 
         function getParticipantIdSafely() {
             return new Promise((resolve, reject) => {
@@ -120,9 +115,57 @@
         function startBlock() {
             document.getElementById('transition-screen').classList.add('hidden');
             trialCount = 0;
+            
+            // Start the audio loop only when the Dual block officially begins
+            if (currentBlock === "Dual" && !audioLoopActive) {
+                audioLoopActive = true;
+                triggerRandomBeep();
+            }
+            
             nextTrial();
         }
 
+        // --- AUDIO LOOP LOGIC ---
+        function triggerRandomBeep() {
+            if (!audioLoopActive) return;
+
+            // Wait between 2.5 to 4.5 seconds (Avg 3.5s)
+            const nextBeepDelay = Math.random() * 2000 + 2500;
+
+            setTimeout(() => {
+                if (!audioLoopActive) return;
+                
+                distractionSound.play();
+                beepStartTime = performance.now();
+                beepActiveWindow = true;
+                hitDetected = false;
+
+                // Open 1.5s window for a hit
+                setTimeout(() => {
+                    if (beepActiveWindow && !hitDetected) {
+                        logEvent("N/A", "Audio_Task", "Spacebar", "Miss", "N/A");
+                    }
+                    beepActiveWindow = false;
+                    triggerRandomBeep(); // Queue the next beep
+                }, 1500);
+
+            }, nextBeepDelay);
+        }
+
+        function logEvent(coherence, trial, choice, acc, rt) {
+            experimentData.push({
+                Timestamp: new Date().toLocaleString(), // Captures exact time of the event
+                Participant_ID: participantID,
+                Condition: currentBlock,
+                Coherence_Level: coherence,
+                Trial_Number: trial,
+                Response_Choice: choice,
+                Accuracy: acc,
+                Reaction_Time: rt
+            });
+        }
+
+        // --- VISUAL TASK LOGIC ---
         function nextTrial() {
             if (trialCount >= maxTrialsPerBlock) {
                 if (currentBlock === "Single") {
@@ -136,16 +179,11 @@
                         "please press the <kbd>SPACE</kbd> key whenever you hear a beep.<br><br>" +
                         "Thank you!";
                 } else {
+                    audioLoopActive = false;
                     finishExperiment();
                 }
                 return;
             }
-
-            clearTimeout(beepTimeout);
-            beepPlayed = false;
-            beepStartTime = null;
-            spacePressed = false;
-            spacePressTime = null;
 
             trialActive = true;
             ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -167,74 +205,36 @@
                 ctx.fill();
             }
 
-            if (currentBlock === "Dual" && Math.random() > 0.4) {
-                const delay = Math.random() * 400 + 200;
-                beepTimeout = setTimeout(() => { 
-                    distractionSound.play(); 
-                    beepStartTime = performance.now();
-                    beepPlayed = true;
-                }, delay);
-            }
-
             startTime = performance.now();
             trialCount++;
         }
 
         window.addEventListener('keydown', (e) => {
-            if (!trialActive) return;
+            const key = e.key.toLowerCase();
 
+            // Handle Audio Task (Spacebar) - Independent of visual trial status
             if (e.code === 'Space' && currentBlock === "Dual") {
-                if (!spacePressed) { 
-                    spacePressed = true;
-                    spacePressTime = performance.now();
+                if (beepActiveWindow && !hitDetected) {
+                    hitDetected = true;
+                    logEvent("N/A", "Audio_Task", "Spacebar", "Hit", (performance.now() - beepStartTime).toFixed(0));
+                } else {
+                    logEvent("N/A", "Audio_Task", "Spacebar", "False Alarm", "N/A");
                 }
                 return; 
             }
 
+            // Handle Visual Task ('b' or 'y')
+            if (!trialActive) return;
+
             let choice = "";
-            const key = e.key.toLowerCase();
             if (key === 'b') choice = "Blue";
             if (key === 'y') choice = "Yellow";
 
             if (choice !== "") {
-                clearTimeout(beepTimeout); 
-
                 const rt = performance.now() - startTime;
                 const isCorrect = choice === currentCorrectColor ? 1 : 0;
 
-                let spaceAcc = "N/A";
-                let spaceRT = "N/A";
-
-                if (currentBlock === "Dual") {
-                    if (beepPlayed) {
-                        if (spacePressed && spacePressTime > beepStartTime) {
-                            spaceAcc = "Hit";
-                            spaceRT = (spacePressTime - beepStartTime).toFixed(0);
-                        } else if (spacePressed && spacePressTime <= beepStartTime) {
-                            spaceAcc = "False Alarm";
-                        } else {
-                            spaceAcc = "Miss";
-                        }
-                    } else { 
-                        if (spacePressed) {
-                            spaceAcc = "False Alarm";
-                        } else {
-                            spaceAcc = "Correct Rejection";
-                        }
-                    }
-                }
-
-                experimentData.push({
-                    Participant_ID: participantID,
-                    Condition: currentBlock,
-                    Coherence_Level: currentCoherence,
-                    Trial_Number: experimentData.length + 1,
-                    Response_Choice: choice,
-                    Accuracy: isCorrect,
-                    Reaction_Time: rt.toFixed(0),
-                    Space_Accuracy: spaceAcc,
-                    Space_RT: spaceRT
-                });
+                logEvent(currentCoherence, trialCount, choice, isCorrect, rt.toFixed(0));
 
                 trialActive = false;
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -246,11 +246,9 @@
             document.getElementById('end-screen').classList.remove('hidden');
             const progressFill = document.getElementById('progress-fill');
             
-            // Set bar to halfway to show it is actively working
             progressFill.style.width = "50%";
             
             try {
-                // Send the ENTIRE array of data in one single request (Batch Upload)
                 await fetch(scriptURL, {
                     method: 'POST',
                     mode: 'no-cors',
@@ -259,16 +257,13 @@
                     body: JSON.stringify(experimentData)
                 });
                 
-                // Once the fetch command completes, fill the bar to 100%
                 progressFill.style.width = "100%";
-                
-                // Brief pause so the user actually sees the bar hit 100% before the text changes
                 await new Promise(resolve => setTimeout(resolve, 400));
                 
             } catch (e) {
                 console.error("Upload error:", e);
                 document.getElementById('status-message').innerText = "Upload Error. Check Connection.";
-                return; // Stop function if upload fails
+                return; 
             }
             
             document.getElementById('status-message').innerText = "Data Upload Complete!";
